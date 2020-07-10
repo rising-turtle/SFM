@@ -40,13 +40,6 @@ void GlobalSFM::do_it(int N, vector<std::vector<feat_obs> >& all_obs)
 	double (*c_translation)[3] = new double[N][3]; 
 	double (*c_rotation)[4] = new double[N][4]; 
 
-	// initilization 
-	for(int i=0; i<N; i++){
-		c_translation[i][0] = c_translation[i][1] = c_translation[i][2] = 0; 
-		c_rotation[i][1] = c_rotation[i][2] = c_rotation[i][3] = 0;
-		c_rotation[i][0] =1.;  
-	}
-
 	Matrix3d R_0 = Matrix3d::Identity(); 
 	Vector3d t_0 = Vector3d::Zero(); 
 	solveFrameByPnP(R_0, t_0, 0, v_sfm_feats); 
@@ -54,16 +47,40 @@ void GlobalSFM::do_it(int N, vector<std::vector<feat_obs> >& all_obs)
 	// Eigen::Vector3d Ps[WN+1]; 
     // Eigen::Vector3d Vs[WN+1]; 
     // Eigen::Matrix3d Rs[WN+1]; 
-	Quaterniond q_0(R_0); 
+    // Matrix3d tmpR = R_0.transpose();
+    // Vector3d tmpt = -tmpR * t_0; 
+	Quaterniond q_0(R_0); // tmpR R_0
+	// t_0 = tmpt; 
+	c_rotation[0][0] = q_0.w();  
 	c_rotation[0][1] = q_0.x(); 
 	c_rotation[0][2] = q_0.y(); 
 	c_rotation[0][3] = q_0.z();
-	c_rotation[0][0] = q_0.w();  
 	c_translation[0][0] = t_0.x(); 
 	c_translation[0][1] = t_0.y(); 
 	c_translation[0][2] = t_0.z(); 
 
-	cout <<" q_0: "<<q_0.vec()<<" t_0: "<<t_0.transpose()<<endl; 
+	cout <<" q_0: "<<q_0.w()<<" "<<q_0.x()<<" "<<q_0.y()<<" "<<q_0.z()<<" t_0: "<<t_0.transpose()<<endl; 
+	Quaterniond q_1 = q_0.inverse(); // (R_0.transpose()); 
+	cout <<" q_1: "<<q_1.w()<<" "<<q_1.x()<<" "<<q_1.y()<<" "<<q_1.z()<<endl; 
+	Quaterniond q_2 (R_0.transpose()); 
+	cout <<" q_2: "<<q_2.w()<<" "<<q_2.x()<<" "<<q_2.y()<<" "<<q_2.z()<<endl; 
+
+	cout<<"R_1: "<<q_1.toRotationMatrix()<<endl << 
+		"R_2: "<<q_2.toRotationMatrix()<<endl;
+	Quaterniond dq = q_1.inverse()*q_2; 
+	cout<<"dq: "<<dq.w()<<" "<<dq.vec().transpose()<<endl;
+
+	// initilization 
+	for(int i=0; i<N; i++){
+/*		c_translation[i][0] = c_translation[i][1] = c_translation[i][2] = 0; 
+		c_rotation[i][1] = c_rotation[i][2] = c_rotation[i][3] = 0;
+		c_rotation[i][0] =1.;  */
+		c_translation[i][0] = t_0.x();
+		c_translation[i][1] = t_0.y();
+		c_translation[i][2] = t_0.z();
+		c_rotation[i][1] = q_0.x(); c_rotation[i][2] = q_0.y(); c_rotation[i][3] = q_0.z();
+		c_rotation[i][0] = q_0.w();
+	}
 
 
 	ceres::Problem problem;
@@ -92,18 +109,30 @@ void GlobalSFM::do_it(int N, vector<std::vector<feat_obs> >& all_obs)
 												sfm_f[i].observation[j].second.x(),
 												sfm_f[i].observation[j].second.y());
 
-    		problem.AddResidualBlock(cost_function, NULL, c_rotation[l], c_translation[l], 
+    		ceres::ResidualBlockId param_id = problem.AddResidualBlock(cost_function, NULL, c_rotation[l], c_translation[l], 
     								sfm_f[i].position);	 
+    		{
+    			vector<double*>* para = new vector<double*>;  
+                problem.GetParameterBlocksForResidualBlock(param_id, para); 
+                vector<double> res(2); 
+                cost_function->Evaluate(&para[0][0], &res[0], 0); 
+                if(res[0] != res[0]){
+
+                	cout<<"i: "<<i<<" j: "<<j<<" (u,v): "<<sfm_f[i].observation[j].second.x()<<" "<<sfm_f[i].observation[j].second.y()
+                	<< " position: "<<sfm_f[i].position[0]<<" "<<sfm_f[i].position[1]<<" "<<sfm_f[i].position[2]<<endl;
+                	cout<<"dvio.cpp: residual: "<<res[0]<<" "<<res[1]<<endl;
+            	}
+    		}	
 		}
 
 	}
 	ceres::Solver::Options options;
 	options.linear_solver_type = ceres::DENSE_SCHUR;
-	// options.minimizer_progress_to_stdout = true;
+	options.minimizer_progress_to_stdout = true;
 	options.max_solver_time_in_seconds = 0.2;
 	ceres::Solver::Summary summary;
 	ceres::Solve(options, &problem, &summary);
-	// std::cout << summary.BriefReport() << "\n";
+	std::cout << summary.BriefReport() << "\n";
 	if (summary.termination_type == ceres::CONVERGENCE || summary.final_cost < 5e-03)
 	{
 		cout << "initial_sfm.cpp: vision only BA converge" << endl;
@@ -114,23 +143,25 @@ void GlobalSFM::do_it(int N, vector<std::vector<feat_obs> >& all_obs)
 		return false;
 	}
 
-
-/*	for (int i = 0; i < N; i++)
+	vector<Quaterniond> q(N); 
+	for (int i = 0; i < N; i++)
 	{
 		q[i].w() = c_rotation[i][0]; 
 		q[i].x() = c_rotation[i][1]; 
 		q[i].y() = c_rotation[i][2]; 
 		q[i].z() = c_rotation[i][3]; 
 		q[i] = q[i].inverse();
-		//cout << "final  q" << " i " << i <<"  " <<q[i].w() << "  " << q[i].vec().transpose() << endl;
+		cout << "final  q" << " i " << i <<"  " <<q[i].w() << "  " << q[i].vec().transpose() << endl;
 	}
-	for (int i = 0; i < frame_num; i++)
+	vector<Vector3d> T(N); 
+	for (int i = 0; i < N; i++)
 	{
 
 		T[i] = -1 * (q[i] * Vector3d(c_translation[i][0], c_translation[i][1], c_translation[i][2]));
-		//cout << "final  t" << " i " << i <<"  " << T[i](0) <<"  "<< T[i](1) <<"  "<< T[i](2) << endl;
+		// T[i] = Vector3d(c_translation[i][0], c_translation[i][1], c_translation[i][2]);
+		cout << "final  t" << " i " << i <<"  " << T[i](0) <<"  "<< T[i](1) <<"  "<< T[i](2) << endl;
 	}
-*/
+
 
 }
 
@@ -173,7 +204,7 @@ bool GlobalSFM::solveFrameByPnP(Matrix3d &R_initial, Vector3d &P_initial, int i,
 	cv::eigen2cv(P_initial, t);
 	cv::Mat K = (cv::Mat_<double>(3, 3) << 1, 0, 0, 0, 1, 0, 0, 0, 1);
 	bool pnp_succ;
-	pnp_succ = cv::solvePnP(pts_3_vector, pts_2_vector, K, D, rvec, t, 1);
+	pnp_succ = cv::solvePnP(pts_3_vector, pts_2_vector, K, D, rvec, t, 0);
 	if(!pnp_succ)
 	{
 		return false;
