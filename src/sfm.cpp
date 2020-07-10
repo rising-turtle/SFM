@@ -9,9 +9,12 @@
 
 GlobalSFM::GlobalSFM(){}
 
-
-void GlobalSFM::do_it(int N, vector<std::vector<feat_obs> >& all_obs)
+vector<SFMFeature> GlobalSFM::init_feat_obs(vector<std::vector<feat_obs> >& all_obs, Quaterniond q0, Vector3d t0, double sigma)
 {
+	static double FOCAL_LENGTH = 460.; 
+	std::normal_distribution<double> noise(0.0, sigma/FOCAL_LENGTH);
+	std::random_device rd;
+    std::default_random_engine generator_(rd());
 	// construct data 
 	int M = all_obs[0].size();  // number of features be tracked 
 	vector<SFMFeature> v_sfm_feats(M); 
@@ -25,16 +28,39 @@ void GlobalSFM::do_it(int N, vector<std::vector<feat_obs> >& all_obs)
 		// depth is set as the value in first frame 
 		sfm_feat.depth = all_obs[0][j].depth; 
 
-		sfm_feat.position[0] = all_obs[0][j].xyz[0]; 
-		sfm_feat.position[1] = all_obs[0][j].xyz[1]; 
-		sfm_feat.position[2] = all_obs[0][j].xyz[2]; 
-
-		for(int i=0; i<N; i++){
+		for(int i=0; i<all_obs.size(); i++){
+			// add noise to u, v,  
+			Vector2d uv; 
+			uv[0] = all_obs[i][j].uv[0] + noise(generator_); 
+			uv[1] = all_obs[i][j].uv[1] + noise(generator_); 
 			sfm_feat.observation.emplace_back(make_pair(i, Vector2d(all_obs[i][j].uv[0], all_obs[i][j].uv[1])));
 			sfm_feat.observation_depth.emplace_back(make_pair(i, all_obs[i][j].depth));
+			if(i==0){
+				// feature position 
+				Vector3d feat_in_cam(uv[0]*sfm_feat.depth, uv[1]*sfm_feat.depth, sfm_feat.depth); 
+				Vector3d feat_in_world = q0 * feat_in_cam + t0; 
+				sfm_feat.position[0] = feat_in_world[0]; 
+				sfm_feat.position[1] = feat_in_world[1]; 
+				sfm_feat.position[2] = feat_in_world[2]; 
+			}
 		}
 	}
+	return v_sfm_feats;
+}
 
+double GlobalSFM::do_it(int N, vector<std::vector<feat_obs> >& all_obs, std::vector<cam_pose>* p_all_pose, double sigma)
+{
+	// first pose 
+	Quaterniond q0(1, 0, 0, 0); 
+	Vector3d t0(0, 0, 0); 
+	if(p_all_pose!=NULL){
+		cam_pose& gt_p = (*p_all_pose)[0];
+		q0 = Quaterniond(gt_p.qw, gt_p.qx, gt_p.qy, gt_p.qz); 
+		t0 = Vector3d(gt_p.x, gt_p.y, gt_p.z); 
+	}
+	int M = all_obs[0].size();  // number of features be tracked 
+
+	vector<SFMFeature> v_sfm_feats = init_feat_obs(all_obs, q0, t0, sigma); 
 	// sfm, gogogo 
 	//full BA
 	double (*c_translation)[3] = new double[N][3]; 
@@ -51,15 +77,15 @@ void GlobalSFM::do_it(int N, vector<std::vector<feat_obs> >& all_obs)
     // Vector3d tmpt = -tmpR * t_0; 
 	Quaterniond q_0(R_0); // tmpR R_0
 	// t_0 = tmpt; 
-	c_rotation[0][0] = q_0.w();  
-	c_rotation[0][1] = q_0.x(); 
-	c_rotation[0][2] = q_0.y(); 
-	c_rotation[0][3] = q_0.z();
-	c_translation[0][0] = t_0.x(); 
-	c_translation[0][1] = t_0.y(); 
-	c_translation[0][2] = t_0.z(); 
+	c_rotation[0][0] = q0.w();  
+	c_rotation[0][1] = q0.x(); 
+	c_rotation[0][2] = q0.y(); 
+	c_rotation[0][3] = q0.z();
+	c_translation[0][0] = t0.x(); 
+	c_translation[0][1] = t0.y(); 
+	c_translation[0][2] = t0.z(); 
 
-	cout <<" q_0: "<<q_0.w()<<" "<<q_0.x()<<" "<<q_0.y()<<" "<<q_0.z()<<" t_0: "<<t_0.transpose()<<endl; 
+	/*cout <<" q_0: "<<q_0.w()<<" "<<q_0.x()<<" "<<q_0.y()<<" "<<q_0.z()<<" t_0: "<<t_0.transpose()<<endl; 
 	Quaterniond q_1 = q_0.inverse(); // (R_0.transpose()); 
 	cout <<" q_1: "<<q_1.w()<<" "<<q_1.x()<<" "<<q_1.y()<<" "<<q_1.z()<<endl; 
 	Quaterniond q_2 (R_0.transpose()); 
@@ -69,8 +95,9 @@ void GlobalSFM::do_it(int N, vector<std::vector<feat_obs> >& all_obs)
 		"R_2: "<<q_2.toRotationMatrix()<<endl;
 	Quaterniond dq = q_1.inverse()*q_2; 
 	cout<<"dq: "<<dq.w()<<" "<<dq.vec().transpose()<<endl;
-
+*/
 	// initilization 
+	
 	for(int i=0; i<N; i++){
 /*		c_translation[i][0] = c_translation[i][1] = c_translation[i][2] = 0; 
 		c_rotation[i][1] = c_rotation[i][2] = c_rotation[i][3] = 0;
@@ -117,7 +144,6 @@ void GlobalSFM::do_it(int N, vector<std::vector<feat_obs> >& all_obs)
                 vector<double> res(2); 
                 cost_function->Evaluate(&para[0][0], &res[0], 0); 
                 if(res[0] != res[0]){
-
                 	cout<<"i: "<<i<<" j: "<<j<<" (u,v): "<<sfm_f[i].observation[j].second.x()<<" "<<sfm_f[i].observation[j].second.y()
                 	<< " position: "<<sfm_f[i].position[0]<<" "<<sfm_f[i].position[1]<<" "<<sfm_f[i].position[2]<<endl;
                 	cout<<"dvio.cpp: residual: "<<res[0]<<" "<<res[1]<<endl;
@@ -128,19 +154,19 @@ void GlobalSFM::do_it(int N, vector<std::vector<feat_obs> >& all_obs)
 	}
 	ceres::Solver::Options options;
 	options.linear_solver_type = ceres::DENSE_SCHUR;
-	options.minimizer_progress_to_stdout = true;
+	// options.minimizer_progress_to_stdout = true;
 	options.max_solver_time_in_seconds = 0.2;
 	ceres::Solver::Summary summary;
 	ceres::Solve(options, &problem, &summary);
-	std::cout << summary.BriefReport() << "\n";
+	// std::cout << summary.BriefReport() << "\n";
 	if (summary.termination_type == ceres::CONVERGENCE || summary.final_cost < 5e-03)
 	{
-		cout << "initial_sfm.cpp: vision only BA converge" << endl;
+		// cout << "initial_sfm.cpp: vision only BA converge" << endl;
 	}
 	else
 	{
 		cout << "initial_sfm.cpp: vision only BA not converge " << endl;
-		return false;
+		return 0;
 	}
 
 	vector<Quaterniond> q(N); 
@@ -151,7 +177,7 @@ void GlobalSFM::do_it(int N, vector<std::vector<feat_obs> >& all_obs)
 		q[i].y() = c_rotation[i][2]; 
 		q[i].z() = c_rotation[i][3]; 
 		q[i] = q[i].inverse();
-		cout << "final  q" << " i " << i <<"  " <<q[i].w() << "  " << q[i].vec().transpose() << endl;
+		// cout << "final  q" << " i " << i <<"  " <<q[i].w() << "  " << q[i].vec().transpose() << endl;
 	}
 	vector<Vector3d> T(N); 
 	for (int i = 0; i < N; i++)
@@ -159,10 +185,21 @@ void GlobalSFM::do_it(int N, vector<std::vector<feat_obs> >& all_obs)
 
 		T[i] = -1 * (q[i] * Vector3d(c_translation[i][0], c_translation[i][1], c_translation[i][2]));
 		// T[i] = Vector3d(c_translation[i][0], c_translation[i][1], c_translation[i][2]);
-		cout << "final  t" << " i " << i <<"  " << T[i](0) <<"  "<< T[i](1) <<"  "<< T[i](2) << endl;
+		// cout << "final  t" << " i " << i <<"  " << T[i](0) <<"  "<< T[i](1) <<"  "<< T[i](2) << endl;
 	}
 
-
+	// compute rmse 
+	if(p_all_pose != NULL && N > 0){
+		double rmse = 0; 
+		for(int i=0; i<N; i++){
+			cam_pose& gt_p = (*p_all_pose)[i];
+			rmse = rmse + SQ(gt_p.x - T[i](0)) + SQ(gt_p.y - T[i](1)) + SQ(gt_p.z - T[i](2)); 
+		}
+		rmse = sqrt(rmse/N); 
+		cout <<" sfm.cpp: rmse: "<<rmse<<endl; 
+		return rmse;
+	}
+	return 0;
 }
 
 bool GlobalSFM::solveFrameByPnP(Matrix3d &R_initial, Vector3d &P_initial, int i,
@@ -188,7 +225,7 @@ bool GlobalSFM::solveFrameByPnP(Matrix3d &R_initial, Vector3d &P_initial, int i,
 			}
 		}
 	}
-	printf("at frame %d has observations: %d\n", i, pts_2_vector.size());
+	// printf("at frame %d has observations: %d\n", i, pts_2_vector.size());
 	if (int(pts_2_vector.size()) < 15)
 	{
 		printf("initial_sfm.cpp: for frame %d, only %d features are found \

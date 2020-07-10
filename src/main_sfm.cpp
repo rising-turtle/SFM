@@ -24,21 +24,56 @@ using namespace std ;
 string sData_path("../../data"); 
 
 vector<vector<feat_obs> > read_data(int N = 100); 
+vector<cam_pose> read_pose(int N = 100); 
 
+extern pair<double, double> mean_std(vector<double>& vdpt); 
 
 int main(int argc, char* argv[])
 {
 	int N = 10; 
  	vector<vector<feat_obs> > all_obs = read_data(N); 
+ 	vector<cam_pose> all_pose = read_pose(N); 
 
  	// do_it 
  	GlobalSFM sfm; 
- 	sfm.do_it(N, all_obs); 
+ 	double sigma = 1;
+ 	vector<double> v_rmse; 
+ 	for(int i=0; i<N; i++){
+ 		double rmse = sfm.do_it(N, all_obs, &all_pose, sigma); 
+ 		v_rmse.push_back(rmse); 
+ 	}
+ 	pair<double, double> m = mean_std(v_rmse); 
+ 	cout<<"main_sfm.cpp: mean rmse: "<<m.first<<" std: "<<m.second<<endl;
+
 
 	return 0; 
 }
 
+vector<cam_pose> read_pose(int N)
+{
+	// string sImage_file = sConfig_path + "MH_05_cam0.txt";
+	string sPose_file = sData_path + "/cam_pose.txt";
+	
+	std::vector<cam_pose> v_cam_pose;
+	int cnt = 0; 
+	std::string sPose_line;
+	ifstream fs;
+	fs.open(sPose_file.c_str());
 
+	while (std::getline(fs, sPose_line) && !sPose_line.empty())
+	{
+		if(cnt++ >= N) break; 
+		std::istringstream ssData(sPose_line);
+		// ssFeatureData >> landmark.x() >> landmark.y() >> landmark.z() >> landmark.w() >> feature_position_un.x() >> feature_position_un.y() >> feature_depth;
+
+		cam_pose p; 
+		double timestamp; 
+		ssData >> p.timestamp >> p.qw >> p.qx >> p.qy >> p.qz >> p.x >> p.y >> p.z;  
+	
+		v_cam_pose.push_back(p); 	
+	}
+	return v_cam_pose; 
+}
 
 vector<std::vector<feat_obs> > read_data(int N)
 {
